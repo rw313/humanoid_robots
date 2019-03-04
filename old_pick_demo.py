@@ -1,8 +1,33 @@
 #!/usr/bin/env python
 
-'''
-resources used: https://answers.ros.org/question/261782/how-to-use-getmodelstate-service-from-gazebo-in-python/ for using getModelState 
-'''
+# Copyright (c) 2015, Fetch Robotics Inc.
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+#     * Redistributions of source code must retain the above copyright
+#       notice, this list of conditions and the following disclaimer.
+#     * Redistributions in binary form must reproduce the above copyright
+#       notice, this list of conditions and the following disclaimer in the
+#       documentation and/or other materials provided with the distribution.
+#     * Neither the name of the Fetch Robotics Inc. nor the names of its
+#       contributors may be used to endorse or promote products derived from
+#       this software without specific prior written permission.
+# 
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED. IN NO EVENT SHALL FETCH ROBOTICS INC. BE LIABLE FOR ANY
+# DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+# (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+# LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+# ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+# THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+# Author: Michael Ferguson
+
 import copy
 import actionlib
 import rospy
@@ -20,7 +45,6 @@ from geometry_msgs.msg import PoseStamped
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from moveit_msgs.msg import PlaceLocation, MoveItErrorCodes
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
-from gazebo_msgs.srv import GetModelState
 
 # Move base using navigation stack
 class MoveBaseClient(object):
@@ -97,32 +121,10 @@ class GraspingClient(object):
         self.pickplace = PickPlaceInterface("arm", "gripper", verbose=True)
         self.move_group = MoveGroupInterface("arm", "base_link")
 
-        #find_topic = "basic_grasping_perception/find_objects"
-        #rospy.loginfo("Waiting for %s..." % find_topic)
-        #self.find_client = actionlib.SimpleActionClient(find_topic, FindGraspableObjectsAction)
-        #self.find_client.wait_for_server()
-	self.model_coordinates = rospy.ServiceProxy('/gazebo/get_model_state', GetModelState)
-
-    def findAndAdd(self, blockName):
-        self.robot_coords = self.model_coordinates("fetch", "")
-        if blockName == "table1":
-                print("Adding table1 to scene")
-                resp_coordinates = self.model_coordinates(blockName, "link")
-                x = resp_coordinates.pose.position.x - self.robot_coords.pose.position.x
-                y = resp_coordinates.pose.position.y - self.robot_coords.pose.position.y
-                z = resp_coordinates.pose.orientation.z
-                self.scene.addBox("table1", .56, .56, .04, x, y, 0.02)
-                self.scene.addBox("table1_surface", .91, .91, 0.04, x, y, .755)
-                self.scene.addBox("table1_column", .042, .042, .74, x, y, .37)
-
-        elif blockName == "demo_cube":
-                print("Adding longBox to scene")
-                resp_coordinates = self.model_coordinates(blockName, "link")
-                x = resp_coordinates.pose.position.x - self.robot_coords.pose.position.x
-                y = resp_coordinates.pose.position.y - self.robot_coords.pose.position.y
-                z = resp_coordinates.pose.position.z
-                self.scene.addBox("demo_cube", .044, .044, .18, x, y, z)
-
+        find_topic = "basic_grasping_perception/find_objects"
+        rospy.loginfo("Waiting for %s..." % find_topic)
+        self.find_client = actionlib.SimpleActionClient(find_topic, FindGraspableObjectsAction)
+        self.find_client.wait_for_server()
 
     def updateScene(self):
         # find objects
@@ -253,7 +255,7 @@ if __name__ == "__main__":
     move_base = MoveBaseClient()
     torso_action = FollowTrajectoryClient("torso_controller", ["torso_lift_joint"])
     head_action = PointHeadClient()
-    gc = GraspingClient()
+    grasping_client = GraspingClient()
 
     # Move the base to be in front of the table
     # Demonstrates the use of the navigation stack
@@ -265,14 +267,11 @@ if __name__ == "__main__":
     rospy.loginfo("Raising torso...")
     torso_action.move_to([0.4, ])
 
-    gc.findAndAdd("table1")
-    gc.findAndAdd("demo_cube")
-
     # Point the head at the cube we want to pick
-    #head_action.look_at(3.7, 3.18, 0.0, "map")
+    head_action.look_at(3.7, 3.18, 0.0, "map")
 
     # Get block to pick
-    while False and not rospy.is_shutdown():
+    while not rospy.is_shutdown():
         rospy.loginfo("Picking object...")
         grasping_client.updateScene()
         #TO DO: stop using perception, use graspit instead 
@@ -289,7 +288,7 @@ if __name__ == "__main__":
         rospy.logwarn("Grasping failed.")
 
     # Place the block
-    while False and not rospy.is_shutdown():
+    while not rospy.is_shutdown():
         rospy.loginfo("Placing object...")
         pose = PoseStamped()
         pose.pose = cube.primitive_poses[0]

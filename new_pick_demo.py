@@ -1,8 +1,5 @@
 #!/usr/bin/env python
 
-'''
-resources used: https://answers.ros.org/question/261782/how-to-use-getmodelstate-service-from-gazebo-in-python/ for using getModelState 
-'''
 import copy
 import actionlib
 import rospy
@@ -20,7 +17,6 @@ from geometry_msgs.msg import PoseStamped
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from moveit_msgs.msg import PlaceLocation, MoveItErrorCodes
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
-from gazebo_msgs.srv import GetModelState
 
 # Move base using navigation stack
 class MoveBaseClient(object):
@@ -97,32 +93,10 @@ class GraspingClient(object):
         self.pickplace = PickPlaceInterface("arm", "gripper", verbose=True)
         self.move_group = MoveGroupInterface("arm", "base_link")
 
-        #find_topic = "basic_grasping_perception/find_objects"
-        #rospy.loginfo("Waiting for %s..." % find_topic)
-        #self.find_client = actionlib.SimpleActionClient(find_topic, FindGraspableObjectsAction)
-        #self.find_client.wait_for_server()
-	self.model_coordinates = rospy.ServiceProxy('/gazebo/get_model_state', GetModelState)
-
-    def findAndAdd(self, blockName):
-        self.robot_coords = self.model_coordinates("fetch", "")
-        if blockName == "table1":
-                print("Adding table1 to scene")
-                resp_coordinates = self.model_coordinates(blockName, "link")
-                x = resp_coordinates.pose.position.x - self.robot_coords.pose.position.x
-                y = resp_coordinates.pose.position.y - self.robot_coords.pose.position.y
-                z = resp_coordinates.pose.orientation.z
-                self.scene.addBox("table1", .56, .56, .04, x, y, 0.02)
-                self.scene.addBox("table1_surface", .91, .91, 0.04, x, y, .755)
-                self.scene.addBox("table1_column", .042, .042, .74, x, y, .37)
-
-        elif blockName == "demo_cube":
-                print("Adding longBox to scene")
-                resp_coordinates = self.model_coordinates(blockName, "link")
-                x = resp_coordinates.pose.position.x - self.robot_coords.pose.position.x
-                y = resp_coordinates.pose.position.y - self.robot_coords.pose.position.y
-                z = resp_coordinates.pose.position.z
-                self.scene.addBox("demo_cube", .044, .044, .18, x, y, z)
-
+        find_topic = "basic_grasping_perception/find_objects"
+        rospy.loginfo("Waiting for %s..." % find_topic)
+        self.find_client = actionlib.SimpleActionClient(find_topic, FindGraspableObjectsAction)
+        self.find_client.wait_for_server()
 
     def updateScene(self):
         # find objects
@@ -176,13 +150,11 @@ class GraspingClient(object):
             if len(obj.grasps) < 1:
                 continue
             # check size
-	    print("Object primitives " )
-	    print(obj.object.primitives[0].dimensions[0]) 
-            if obj.object.primitives[0].dimensions[0] < 0.03 or \
+            if obj.object.primitives[0].dimensions[0] < 0.05 or \
                obj.object.primitives[0].dimensions[0] > 0.07 or \
-               obj.object.primitives[0].dimensions[0] < 0.03 or \
+               obj.object.primitives[0].dimensions[0] < 0.05 or \
                obj.object.primitives[0].dimensions[0] > 0.07 or \
-               obj.object.primitives[0].dimensions[0] < 0.03 or \
+               obj.object.primitives[0].dimensions[0] < 0.05 or \
                obj.object.primitives[0].dimensions[0] > 0.07:
                 continue
             # has to be on table
@@ -253,32 +225,29 @@ if __name__ == "__main__":
     move_base = MoveBaseClient()
     torso_action = FollowTrajectoryClient("torso_controller", ["torso_lift_joint"])
     head_action = PointHeadClient()
-    gc = GraspingClient()
+    grasping_client = GraspingClient()
 
     # Move the base to be in front of the table
     # Demonstrates the use of the navigation stack
-    rospy.loginfo("Moving to table...")
-    move_base.goto(2.250, 3.118, 0.0)
-    move_base.goto(2.750, 3.118, 0.0)
+    #rospy.loginfo("Moving to table -.5 y...")
+    #move_base.goto(0.0, -0.5, 0.0)
+    rospy.loginfo("Skipping moving to table...")
+    move_base.goto(2.550, 3.118, 0.0)
+    #move_base.goto(2.750, 1.65, 0.0)
 
     # Raise the torso using just a controller
     rospy.loginfo("Raising torso...")
     torso_action.move_to([0.4, ])
 
-    gc.findAndAdd("table1")
-    gc.findAndAdd("demo_cube")
-
     # Point the head at the cube we want to pick
-    #head_action.look_at(3.7, 3.18, 0.0, "map")
+    rospy.loginfo("Looking at object...")
+    head_action.look_at(3.7, 3.18, 0.0, "map") or #3.8, 3.15
 
     # Get block to pick
-    while False and not rospy.is_shutdown():
+    while not rospy.is_shutdown():
         rospy.loginfo("Picking object...")
         grasping_client.updateScene()
-        #TO DO: stop using perception, use graspit instead 
-	#graspit will generate a grasp. refer to fetch_gazebo scripts prepare....py for sending the grasp to the arm/grasper. 
-	
-	cube, grasps = grasping_client.getGraspableCube()
+        cube, grasps = grasping_client.getGraspableCube()
         if cube == None:
             rospy.logwarn("Perception failed.")
             continue
@@ -288,8 +257,24 @@ if __name__ == "__main__":
             break
         rospy.logwarn("Grasping failed.")
 
+    # Tuck the arm
+    grasping_client.tuck()
+
+    # Lower torso
+    rospy.loginfo("Lowering torso...")
+    torso_action.move_to([0.0, ])
+
+    # Move to second table
+    rospy.loginfo("Moving to second table...")
+    move_base.goto(-3.53, 3.75, 1.57)
+    move_base.goto(-3.53, 4.15, 1.57)
+
+    # Raise the torso using just a controller
+    rospy.loginfo("Raising torso...")
+    torso_action.move_to([0.4, ])
+
     # Place the block
-    while False and not rospy.is_shutdown():
+    while not rospy.is_shutdown():
         rospy.loginfo("Placing object...")
         pose = PoseStamped()
         pose.pose = cube.primitive_poses[0]
