@@ -7,7 +7,7 @@ import copy
 import actionlib
 import rospy
 
-from math import sin, cos
+from math import sin, cos, fabs
 from moveit_python import (MoveGroupInterface,
                            PlanningSceneInterface,
                            PickPlaceInterface)
@@ -16,11 +16,13 @@ from moveit_python.geometry import rotate_pose_msg_by_euler_angles
 from control_msgs.msg import FollowJointTrajectoryAction, FollowJointTrajectoryGoal
 from control_msgs.msg import PointHeadAction, PointHeadGoal
 from grasping_msgs.msg import FindGraspableObjectsAction, FindGraspableObjectsGoal
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Pose, Point, Quaternion
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from moveit_msgs.msg import PlaceLocation, MoveItErrorCodes
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from gazebo_msgs.srv import GetModelState
+from graspit_commander import GraspitCommander
+
 
 # Move base using navigation stack
 class MoveBaseClient(object):
@@ -124,73 +126,25 @@ class GraspingClient(object):
                 self.scene.addBox("demo_cube", .044, .044, .18, x, y, z)
 
 
-    def updateScene(self):
-        # find objects
-        goal = FindGraspableObjectsGoal()
-        goal.plan_grasps = True
-        self.find_client.send_goal(goal)
-        self.find_client.wait_for_result(rospy.Duration(5.0))
-        find_result = self.find_client.get_result()
-
-        # remove previous objects
-        for name in self.scene.getKnownCollisionObjects():
-            self.scene.removeCollisionObject(name, False)
-        for name in self.scene.getKnownAttachedObjects():
-            self.scene.removeAttachedObject(name, False)
         self.scene.waitForSync()
 
-        # insert objects to scene
-        idx = -1
-        for obj in find_result.objects:
-            idx += 1
-            obj.object.name = "object%d"%idx
-            self.scene.addSolidPrimitive(obj.object.name,
-                                         obj.object.primitives[0],
-                                         obj.object.primitive_poses[0],
-                                         wait = False)
+    def moveArm(self, pose):
+	gripper_frame = 'wrist_roll_link'
+	gripper_pose_stamped = PoseStamped()
+	
+        gripper_pose_stamped.header.frame_id = 'base_link'
+        gripper_pose_stamped.header.stamp = rospy.Time.now()
+	
+	resp_coordinates = self.model_coordinates("demo_cube", "link")
+        x = resp_coordinates.pose.position.x - self.robot_coords.pose.position.x + fabs(pose.position.x) #should be less than .7 for reachability 
+        y = resp_coordinates.pose.position.y - self.robot_coords.pose.position.y + fabs(pose.position.y)
+        z = resp_coordinates.pose.position.z + fabs(pose.position.z) #should be around 0.87
 
-        for obj in find_result.support_surfaces:
-            # extend surface to floor, and make wider since we have narrow field of view
-            height = obj.primitive_poses[0].position.z
-            obj.primitives[0].dimensions = [obj.primitives[0].dimensions[0],
-                                            1.5,  # wider
-                                            obj.primitives[0].dimensions[2] + height]
-            obj.primitive_poses[0].position.z += -height/2.0
-
-            # add to scene
-            self.scene.addSolidPrimitive(obj.name,
-                                         obj.primitives[0],
-                                         obj.primitive_poses[0],
-                                         wait = False)
-
-        self.scene.waitForSync()
-
-        # store for grasping
-        self.objects = find_result.objects
-        self.surfaces = find_result.support_surfaces
-
-    def getGraspableCube(self):
-        graspable = None
-        for obj in self.objects:
-            # need grasps
-            if len(obj.grasps) < 1:
-                continue
-            # check size
-	    print("Object primitives " )
-	    print(obj.object.primitives[0].dimensions[0]) 
-            if obj.object.primitives[0].dimensions[0] < 0.03 or \
-               obj.object.primitives[0].dimensions[0] > 0.07 or \
-               obj.object.primitives[0].dimensions[0] < 0.03 or \
-               obj.object.primitives[0].dimensions[0] > 0.07 or \
-               obj.object.primitives[0].dimensions[0] < 0.03 or \
-               obj.object.primitives[0].dimensions[0] > 0.07:
-                continue
-            # has to be on table
-            if obj.object.primitive_poses[0].position.z < 0.5:
-                continue
-            return obj.object, obj.grasps
-        # nothing detected
-        return None, None
+	new_pose = Pose(Point(x, y, z), pose.orientation)
+	print("new pose: " )
+	print(new_pose)
+	gripper_pose_stamped.pose = new_pose
+	return self.move_group.moveToPose(gripper_pose_stamped, gripper_frame) 
 
     def getSupportSurface(self, name):
         for surface in self.support_surfaces:
@@ -258,8 +212,8 @@ if __name__ == "__main__":
     # Move the base to be in front of the table
     # Demonstrates the use of the navigation stack
     rospy.loginfo("Moving to table...")
-    move_base.goto(2.250, 3.118, 0.0)
-    move_base.goto(2.750, 3.118, 0.0)
+    #move_base.goto(2.250, 3.118, 0.0)
+    #move_base.goto(3.100, 3.118, 0.0)
 
     # Raise the torso using just a controller
     rospy.loginfo("Raising torso...")
@@ -268,25 +222,21 @@ if __name__ == "__main__":
     gc.findAndAdd("table1")
     gc.findAndAdd("demo_cube")
 
-    # Point the head at the cube we want to pick
-    #head_action.look_at(3.7, 3.18, 0.0, "map")
+    gic = GraspitCommander()
+    gic.clearWorld()
+    gic.importObstacle("floor", Pose(Point(-2, -2, -0.09), Quaternion(0,0,0,1)))
+    gic.importGraspableBody("longBox", Pose(Point(0,0,0),Quaternion(0,.7071,0,.7071)))
+    gic.importRobot("fetch_gripper")
+    result = gic.planGrasps(max_steps=50000)
+    grasp = None
+    for g in result.grasps:
+	if g.dofs[0] > 1.0:
+	    grasp = g
+	    break
+    print("Found grasp: ")
+    print(grasp)
 
-    # Get block to pick
-    while False and not rospy.is_shutdown():
-        rospy.loginfo("Picking object...")
-        grasping_client.updateScene()
-        #TO DO: stop using perception, use graspit instead 
-	#graspit will generate a grasp. refer to fetch_gazebo scripts prepare....py for sending the grasp to the arm/grasper. 
-	
-	cube, grasps = grasping_client.getGraspableCube()
-        if cube == None:
-            rospy.logwarn("Perception failed.")
-            continue
-
-        # Pick the block
-        if grasping_client.pick(cube, grasps):
-            break
-        rospy.logwarn("Grasping failed.")
+    gc.moveArm(grasp.pose)
 
     # Place the block
     while False and not rospy.is_shutdown():
@@ -300,5 +250,5 @@ if __name__ == "__main__":
         rospy.logwarn("Placing failed.")
 
     # Tuck the arm, lower the torso
-    grasping_client.tuck()
+    gc.tuck()
     torso_action.move_to([0.0, ])
