@@ -213,7 +213,7 @@ if __name__ == "__main__":
     #gc.tuck()
     rospy.loginfo("Moving to table...")
     #move_base.goto(2.250, 3.118, 0.0)
-    #move_base.goto(3.100, 3.118, 0.0)
+    move_base.goto(3.100, 3.118, 0.0)
 
     rospy.loginfo("Raising torso...")
     torso_action.move_to([0.4, ])
